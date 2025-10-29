@@ -27,7 +27,14 @@ public class EventRepository<TBaseEvent, TSnapshot>(EventStore<TBaseEvent> event
 
         foreach (var @event in events)
         {
-            @event.EventBody.Apply(model, new(@event.CreatedOn, @event.EventNumber, @event.Metadata));
+            if (@event.EventBody.GetType().IsAssignableTo(typeof(ITombstoneEvent<TSnapshot>)))
+            {
+                model = (@event.EventBody as ITombstoneEvent<TSnapshot>)!.Snapshot;
+            }
+            else
+            {
+                @event.EventBody.Apply(model, new(@event.CreatedOn, @event.EventNumber, @event.Metadata));
+            }
         }
 
         if (model.DeletedAt.HasValue && !includeDeleted)

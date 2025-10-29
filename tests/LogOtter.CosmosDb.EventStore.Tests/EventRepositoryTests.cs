@@ -135,11 +135,38 @@ public class EventRepositoryTests
         projection.Name.ShouldBe(newName);
     }
 
+    [Fact]
+    public async Task TombstoneEventIsHandledCorrectly()
+    {
+        var eventRepository = CreateEventRepository();
+
+        var id = Guid.NewGuid().ToString();
+        var name = "Bob Bobertson";
+
+        var testCreatedEvent = new TestEventCreated(id, name);
+        await eventRepository.ApplyEvents(id, null, testCreatedEvent);
+
+        var projectionBeforeDelete = await eventRepository.Get(id, cancellationToken: TestContext.Current.CancellationToken);
+        projectionBeforeDelete!.Name = "Anonymous";
+
+        var testDeletedEvent = new TestEventTombstone(projectionBeforeDelete, id);
+        await eventRepository.ApplyEvents(id, projectionBeforeDelete.Revision, testDeletedEvent);
+
+        var projectionAfterDelete = await eventRepository.Get(id, cancellationToken: TestContext.Current.CancellationToken);
+        projectionAfterDelete.ShouldNotBeNull();
+        projectionAfterDelete.Name.ShouldBe("Anonymous");
+
+        var allEvents = await eventRepository.GetEventStream(id, cancellationToken: TestContext.Current.CancellationToken);
+        allEvents.Count.ShouldBe(1);
+    }
+
     private static EventRepository<TestEvent, TestEventProjection> CreateEventRepository()
     {
         var container = new ContainerMock.ContainerMock();
         var feedIteratorFactory = new TestFeedIteratorFactory();
-        var serializationTypeMap = new SimpleSerializationTypeMap(new[] { typeof(TestEventCreated), typeof(TestEventModified) });
+        var serializationTypeMap = new SimpleSerializationTypeMap(
+            new[] { typeof(TestEventCreated), typeof(TestEventModified), typeof(TestEventTombstone) }
+        );
         var eventStore = new EventStore<TestEvent>(container, feedIteratorFactory, serializationTypeMap);
         var options = new OptionsWrapper<EventStoreOptions>(new EventStoreOptions());
         return new EventRepository<TestEvent, TestEventProjection>(eventStore, options);

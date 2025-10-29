@@ -1,4 +1,5 @@
 ﻿using System.Net;
+using System.Reflection;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.Cosmos.Linq;
 using Newtonsoft.Json;
@@ -36,25 +37,31 @@ public class EventStore<TBaseEvent> : IEventStoreReader
 
     public async Task AppendToStream(string streamId, int expectedVersion, params EventData<TBaseEvent>[] events)
     {
-        await AppendToStream(streamId, expectedVersion, default, events);
+        await AppendToStream(streamId, expectedVersion, CancellationToken.None, events);
     }
 
     public async Task AppendToStream(string streamId, int expectedVersion, CancellationToken cancellationToken, params EventData<TBaseEvent>[] events)
     {
         var storageEvents = new List<StorageEvent<TBaseEvent>>();
         var eventVersion = expectedVersion;
-
+        var compactionId = -1;
         foreach (var @event in events)
         {
             storageEvents.Add(new StorageEvent<TBaseEvent>(streamId, @event, ++eventVersion));
+            var bodyType = @event.Body.GetType();
+            if (bodyType.GetInterfaces().Any(t => t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ITombstoneEvent<>)))
+            {
+                compactionId = eventVersion;
+            }
         }
 
-        await AppendToStreamInternal(streamId, storageEvents, cancellationToken);
+        await AppendToStreamInternal(streamId, storageEvents, compactionId, cancellationToken);
     }
 
     private async Task AppendToStreamInternal(
         string streamId,
         IEnumerable<StorageEvent<TBaseEvent>> events,
+        int compactionId = -1,
         CancellationToken cancellationToken = default
     )
     {
@@ -66,10 +73,19 @@ public class EventStore<TBaseEvent> : IEventStoreReader
             var batchRequestOptions = new TransactionalBatchItemRequestOptions { EnableContentResponseOnWrite = false };
 
             var batch = _container.CreateTransactionalBatch(new PartitionKey(streamId));
+
             foreach (var @event in storageEvents)
             {
                 var cosmosDbStorageEvent = CosmosDbStorageEvent.FromStorageEvent(@event, _typeMap, _jsonSerializer);
                 batch.CreateItem(cosmosDbStorageEvent, batchRequestOptions);
+            }
+
+            if (compactionId >= 1)
+            {
+                for (var i = 1; i < compactionId; i++)
+                {
+                    batch.DeleteItem($"{streamId}:{i}");
+                }
             }
 
             using var batchResponse =

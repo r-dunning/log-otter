@@ -150,7 +150,16 @@ internal class TestTransactionalBatch(PartitionKey partitionKey, ContainerMock c
 
     public override Microsoft.Azure.Cosmos.TransactionalBatch DeleteItem(string id, TransactionalBatchItemRequestOptions? requestOptions = null)
     {
-        throw new NotImplementedException();
+        var itemRequestOptions = CreateItemRequestOptions(requestOptions);
+
+        _actions.Enqueue(response =>
+        {
+            var itemResponse = containerMock.DeleteItemStreamAsync(id, partitionKey, itemRequestOptions).GetAwaiter().GetResult();
+
+            response.AddResult(itemResponse);
+        });
+
+        return this;
     }
 
     public override Microsoft.Azure.Cosmos.TransactionalBatch PatchItem(
